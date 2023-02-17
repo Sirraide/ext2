@@ -61,4 +61,17 @@ int main(int argc, char** argv) {
     for (const auto& Entry : *Dir) {
         fmt::print("    {}\n", Entry->name);
     }
+
+    /// Read from a file.
+    auto F = Drive->OpenFile("/test/hello.txt");
+    std::vector<char> Buffer;
+    Buffer.resize(1024);
+    auto BytesRead = F->Read(Buffer.data(), Buffer.size());
+    if (not BytesRead) {
+        fmt::print(stderr, "Failed to read from file\n");
+        return 1;
+    }
+
+    fmt::print("First 1024 bytes of '/test/hello.txt': \"{}\"\n", std::string_view(Buffer.data(), *BytesRead));
+
 }

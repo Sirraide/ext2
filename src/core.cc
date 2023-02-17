@@ -284,7 +284,6 @@ auto Drive::ComputeInodeOffset(u32 InodeNumber) -> std::optional<usz> {
     return Offset;
 }
 
-
 auto Drive::FindDirectoryEntry(Inode& I, std::string_view Name) -> std::optional<LinkedDirEntryHeader> {
     if (not I.Is(Inode::Directory)) return {};
     std::vector<char> EntryName;
@@ -638,6 +637,25 @@ Dir::Dir(Inode I_, InodeNumberType INum_, std::shared_ptr<Drive> Drv_)
       Drv(std::move(Drv_)) {}
 
 /// ===========================================================================
+///  File API.
+/// ===========================================================================
+File::File(InodeNumberType INum, std::shared_ptr<Drive> Drv_) : InodeNumber(INum), Drv(std::move(Drv_)) { }
+
+auto File::Read(void* Buf, usz Len) -> std::optional<usz> {
+    /// Get the inode.
+    auto I = Drv->ReadInode(InodeNumber);
+    if (not I) return {};
+
+    /// Read the data.
+    auto ToRead = std::min<usz>(Len, I->i_size - Offset);
+    if (not Drv->ReadInodeData(*I, Offset, Buf, ToRead)) return {};
+
+    /// Update the offset.
+    Offset += ToRead;
+    return ToRead;
+}
+
+/// ===========================================================================
 ///  Drive API.
 /// ===========================================================================
 /// Open a directory.
@@ -649,6 +667,13 @@ auto Drive::OpenDir(std::string_view FilePath, std::string_view Origin) -> std::
     if (not I) return {};
 
     return std::unique_ptr<Dir>{::new Dir{*I, *INum, This.lock()}};
+}
+
+/// Open a file.
+auto Drive::OpenFile(std::string_view FilePath, std::string_view Origin) -> std::unique_ptr<File> {
+    auto INum = InodeFromPath(FilePath, Origin);
+    if (not INum) return {};
+    return std::unique_ptr<File>{::new File{*INum, This.lock()}};
 }
 
 /// Initialise a directory iterator.

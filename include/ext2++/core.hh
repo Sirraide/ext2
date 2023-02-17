@@ -261,6 +261,32 @@ public:
     std::default_sentinel_t end() { return {}; }
 };
 
+/// File handle.
+class File {
+    /// The inode for this file. We can’t cache the inode because
+    /// the underlying file may change while it’s open.
+    InodeNumberType InodeNumber;
+
+    /// File pointer.
+    u64 Offset = 0;
+
+    /// The drive this file is on.
+    std::shared_ptr<Drive> Drv;
+
+    /// Create a new file handle.
+    File(InodeNumberType, std::shared_ptr<Drive>);
+
+public:
+    friend class Drive;
+    File(const File&) = delete;
+    File(File&&) = delete;
+    File& operator=(const File&) = delete;
+    File& operator=(File&&) = delete;
+
+    /// Read from this file.
+    auto Read(void* Buf, usz Len) -> std::optional<usz>;
+};
+
 /// A handle to a drive.
 class Drive final {
     FdType FileHandle;
@@ -290,6 +316,7 @@ class Drive final {
     auto ReadInode(InodeNumberType InodeNumber) -> std::optional<Inode>;
 
     /// Read inode data at an offset relative to the beginning of the inode.
+    /// This function does not perform bounds checking on the inode data.
     bool ReadInodeData(Inode& Inode, usz Offset, void* Buffer, usz Size);
 
     /// Write a descriptor table to a block group index.
@@ -302,7 +329,9 @@ class Drive final {
     std::weak_ptr<Drive> This;
 
 public:
+    friend class Dir;
     friend class Dir::Iterator;
+    friend class File;
     ~Drive();
     Drive(const Drive&) = delete;
     Drive(Drive&&) = delete;
@@ -311,6 +340,9 @@ public:
 
     /// Open a directory.
     auto OpenDir(std::string_view FilePath, std::string_view origin = "") -> std::unique_ptr<Dir>;
+
+    /// Open a file.
+    auto OpenFile(std::string_view FilePath, std::string_view origin = "") -> std::unique_ptr<File>;
 
     /// Stat an inode.
     auto Stat(std::string_view FilePath, std::string_view origin = "") -> std::optional<struct stat>;
