@@ -1,0 +1,16 @@
+## IDE and editor files.
+.idea/
+.vscode/
+.cache/
+
+## Build files.
+out/
+ext2++
+ext2++.exe
+
+## Drives.
+*.bin
+*.img
+
+## Valgrind.
+callgrind.out.*
