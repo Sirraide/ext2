@@ -2,15 +2,13 @@
 #define EXT2_CORE_HH
 
 #include <ext2++/bits/utils.hh>
+#include <sys/stat.h>
 
 namespace Ext2 {
-#ifdef __linux__
-using FdType = int;
-#endif
-
-constexpr inline usz MAX_PATH = 255;
-
+using FdType = EXT2XX_FILE_DESCRIPTOR_TYPE;
 using InodeNumberType = u32;
+
+constexpr inline usz MAX_NAME = 255;
 
 /// Forward declaration.
 class Drive;
@@ -233,7 +231,7 @@ public:
     class Iterator {
         Dir* D{};
         LinkedDirEntryHeader Hdr{};
-        std::array<char, 256> Name{};
+        std::array<char, MAX_NAME + 1> Name{};
         usz NextOffset{};
         bool Done = true;
 
@@ -247,7 +245,7 @@ public:
             ++*this;
             return tmp;
         }
-        auto operator*() const -> std::optional<Entry> { return Entry{std::string{Name.data(), std::min<usz>(MAX_PATH, Hdr.name_len)}}; }
+        auto operator*() const -> std::optional<Entry> { return Entry{std::string{Name.data(), std::min<usz>(MAX_NAME, Hdr.name_len)}}; }
         bool operator==(std::default_sentinel_t) const { return Done; }
     };
 

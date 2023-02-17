@@ -1,5 +1,4 @@
 #include <ext2++/core.hh>
-#include <fmt/chrono.h>
 #include <optional>
 #include <utility>
 
@@ -146,13 +145,17 @@ Drive::Drive(FdType Fd_, Superblock&& Sb_) : FileHandle(Fd_), Sb(std::move(Sb_))
     };
 
     [[maybe_unused]] auto FormatUUID = [](const u8* UUID) {
-        return fmt::format(
+        return EXT2XX_FORMAT(
             "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-"
             "{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
             UUID[0], UUID[1], UUID[2], UUID[3], UUID[4], UUID[5], UUID[6],
             UUID[7], UUID[8], UUID[9], UUID[10], UUID[11], UUID[12], UUID[13],
             UUID[14], UUID[15]
         );
+    };
+
+    [[maybe_unused]] auto FormatTime = [](time_t t) {
+        return EXT2XX_FORMAT("{:%Y/%m/%d %T} UTC", *gmtime(&t));
     };
 
     DEBUG(
@@ -164,12 +167,12 @@ Drive::Drive(FdType Fd_, Superblock&& Sb_) : FileHandle(Fd_), Sb(std::move(Sb_))
         "    blocks per group: {}\n"
         "    inode size:       {} bytes\n"
         "    block size:       {} bytes\n"
-        "    last mount time:  {:%Y/%m/%d %T} UTC\n"
+        "    last mount time:  {}\n"
         "    mount count:      {}\n"
         "    error handling:   {}\n"
         "    minor revision:   {}\n"
         "    revision:         {}\n"
-        "    last check time:  {:%Y/%m/%d %T} UTC\n"
+        "    last check time:  {}\n"
         "    check interval:   {}\n"
         "    created on:       {}\n"
         "    resuid/resgid:    {}/{}\n"
@@ -208,12 +211,12 @@ Drive::Drive(FdType Fd_, Superblock&& Sb_) : FileHandle(Fd_), Sb(std::move(Sb_))
         Sb.s_blocks_per_group,
         Sb.s_inode_size,
         Sb.block_size(),
-        std::chrono::system_clock::from_time_t(std::time_t(Sb.s_mtime)),
+        FormatTime(std::time_t(Sb.s_mtime)),
         Sb.s_mnt_count,
         FormatErrorHandling(Sb.s_errors),
         Sb.s_minor_rev_level,
         FormatRevisionLevel(Sb.s_rev_level),
-        std::chrono::system_clock::from_time_t(std::time_t(Sb.s_lastcheck)),
+        FormatTime(std::time_t(Sb.s_lastcheck)),
         Sb.s_checkinterval,
         FormatCreatorOS(Sb.s_creator_os),
         Sb.s_def_resuid, Sb.s_def_resgid,
@@ -244,7 +247,7 @@ Drive::Drive(FdType Fd_, Superblock&& Sb_) : FileHandle(Fd_), Sb(std::move(Sb_))
     );
 
     /// Set the last mount time.
-    Sb.s_mtime = (u32) std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    Sb.s_mtime = (u32) time(nullptr);
 
     /// Increment the mount count.
     Sb.s_mnt_count++;
@@ -639,7 +642,7 @@ Dir::Dir(Inode I_, InodeNumberType INum_, std::shared_ptr<Drive> Drv_)
 /// ===========================================================================
 ///  File API.
 /// ===========================================================================
-File::File(InodeNumberType INum, std::shared_ptr<Drive> Drv_) : InodeNumber(INum), Drv(std::move(Drv_)) { }
+File::File(InodeNumberType INum, std::shared_ptr<Drive> Drv_) : InodeNumber(INum), Drv(std::move(Drv_)) {}
 
 auto File::Read(void* Buf, usz Len) -> std::optional<usz> {
     /// Get the inode.
@@ -734,7 +737,7 @@ auto Drive::Stat(std::string_view FilePath, std::string_view Origin) -> std::opt
     }
 
     /// Update the access time.
-    I->i_atime = (u32) std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    I->i_atime = (u32) time(nullptr);
     if (not WriteInode(*INum, *I)) return {};
 
     /// Extract properties.
