@@ -54,18 +54,18 @@ isz WriteReentrant(FdType fd, const void* Src, usz Size) {
 bool Read(FdType Fd, usz Offs, void* Dest, usz Size) {
     /// Seek to the offset.
     if (lseek64(Fd, isz(Offs), SEEK_SET) < 0) {
-        Log("Failed to seek in file: {}\n", strerror(errno));
+        Log("Failed to seek in file: {}", strerror(errno));
         return false;
     }
 
     /// Read from the file.
     auto BytesRead = ReadReentrant(Fd, Dest, Size);
     if (BytesRead < 0) {
-        Log("Failed to read from file: {}\n", strerror(errno));
+        Log("Failed to read from file: {}", strerror(errno));
         return false;
     }
     if (usz(BytesRead) != Size) {
-        Log("Failed to read from file: Unexpected EOF\n");
+        Log("Failed to read from file: Unexpected EOF");
         return false;
     }
     return true;
@@ -75,17 +75,22 @@ bool Read(FdType Fd, usz Offs, void* Dest, usz Size) {
 bool Write(FdType Fd, isz Offs, void const* Src, usz Size) {
     /// Seek to the offset.
     if (lseek64(Fd, Offs, SEEK_SET) < 0) {
-        Log("Failed to seek in file: {}\n", strerror(errno));
+        Log("Failed to seek in file: {}", strerror(errno));
         return false;
     }
 
     /// Write to the file.
     auto BytesWritten = WriteReentrant(Fd, Src, Size);
     if (BytesWritten < 0 or usz(BytesWritten) != Size) {
-        Log("Failed to write to file: {}\n", strerror(errno));
+        Log("Failed to write to file: {}", strerror(errno));
         return false;
     }
     return true;
+}
+
+/// Remove leading slashes from a path.
+void RemoveLeadingSlashes(std::string_view& Path) {
+    while (not Path.empty() and Path[0] == '/') Path.remove_prefix(1);
 }
 
 /// ===========================================================================
@@ -98,6 +103,7 @@ constexpr inline usz DIRECT_BLOCK_COUNT = 12;
 constexpr inline usz INDIRECT_BLOCK_INDEX = 12;
 constexpr inline usz DOUBLY_INDIRECT_BLOCK_INDEX = 13;
 constexpr inline usz TRIPLY_INDIRECT_BLOCK_INDEX = 14;
+constexpr inline InodeNumberType ROOT_INODE_NUMBER = 2;
 
 template <typename T>
 requires std::is_enum_v<T>
@@ -276,6 +282,152 @@ auto Drive::ComputeInodeOffset(u32 InodeNumber) -> std::optional<usz> {
     /// Finally, compute the offset of the inode.
     u32 Offset = dt->bg_inode_table * Sb.block_size() + LocalIndex * Sb.s_inode_size;
     return Offset;
+}
+
+
+auto Drive::FindDirectoryEntry(const Inode& I, std::string_view Name) -> std::optional<LinkedDirEntryHeader> {
+    if (not I.Is(Inode::Directory)) return {};
+    std::vector<char> EntryName;
+    usz Offset = 0;
+
+    /// Iterate over all directory entries until we find the one we want.
+    while (Offset < I.i_size) {
+        /// Read the directory entry header.
+        LinkedDirEntryHeader H{};
+        if (not Read(FileHandle, Offset, &H, sizeof H)) return {};
+
+        /// Check if the name matches.
+        if (H.name_len == Name.size()) {
+            EntryName.clear();
+            EntryName.resize(H.name_len);
+            if (not Read(FileHandle, Offset + sizeof H, EntryName.data(), H.name_len)) return {};
+            if (std::string_view{EntryName.data(), EntryName.size()} == Name)
+                return H;
+        }
+
+        /// Skip to the next entry.
+        Offset += H.rec_len;
+    }
+
+    return {};
+}
+
+auto Drive::InodeFromPath(std::string_view Path, std::string_view OriginPath) -> std::optional<InodeNumberType> {
+    /// Path may not be empty.
+    if (Path.empty()) {
+        Log("Cannot resolve empty path.");
+        return {};
+    }
+
+    /// Absolute path.
+    if (Path.starts_with("/")) {
+        RemoveLeadingSlashes(Path);
+        return InodeFromPath(Path, ROOT_INODE_NUMBER);
+    }
+
+    /// Relative Path.
+    else {
+        /// Origin cannot be empty as relative paths must be
+        /// relative to something.
+        if (OriginPath.empty()) {
+            Log("Cannot resolve relative path without origin.");
+            return {};
+        }
+
+        /// Origin must be absolute.
+        if (not OriginPath.starts_with("/")) {
+            Log("Origin must be absolute.");
+            return {};
+        }
+
+        /// Get the origin inode number.
+        auto OriginInode = InodeFromPath(OriginPath);
+        if (not OriginInode) {
+            Log("Failed to resolve origin path.");
+            return {};
+        }
+
+        /// Resolve the path relative to the origin.
+        return InodeFromPath(Path, *OriginInode);
+    }
+}
+
+auto Drive::InodeFromPath(std::string_view Path, InodeNumberType Origin) -> std::optional<InodeNumberType> {
+    if (not Path.empty()) {
+        /// Invariant: Path is not empty at the beginning of
+        /// each iteration of this loop.
+        for (;;) {
+            /// Get the next path component.
+            auto Slash = Path.find('/');
+            auto Component = Path.substr(0, Slash);
+            Path.remove_prefix(Slash == std::string_view::npos ? Path.size() : Slash + 1);
+
+            /// Get the origin inode.
+            auto OriginInode = ReadInode(Origin);
+            if (not OriginInode) {
+                Log("Failed to read inode {}.", Origin);
+                return {};
+            }
+
+            /// Inode must be a directory.
+            if (not OriginInode->Is(Inode::Directory)) {
+                Log("Inode is not a directory.");
+                return {};
+            }
+
+            /// Get the directory entry.
+            auto Entry = FindDirectoryEntry(*OriginInode, Component);
+            if (not Entry) {
+                Log("Failed to find entry {} in directory {}.", Component, Origin);
+                return {};
+            }
+
+            /// That entry is our new origin.
+            Origin = Entry->inode;
+
+            /// If there are trailing slashes, then this inode
+            /// must be a directory.
+            if (Path.starts_with("/")) {
+                if (auto FF = GetFileFormat(*Entry); not FF or *FF != Inode::Directory) {
+                    Log("Inode is not a directory.");
+                    return {};
+                }
+                RemoveLeadingSlashes(Path);
+            }
+
+            /// If there are no more path components, then we are done.
+            if (Path.empty()) break;
+        }
+    }
+
+    /// Return the current origin when we’re done walking the path.
+    return Origin;
+}
+
+auto Drive::GetFileFormat(LinkedDirEntryHeader Hdr) -> std::optional<Inode::FileFormat> {
+    if (Sb.s_rev_level == RevisionLevel::DynamicRev) {
+        switch (Hdr.file_type) {
+            case 0: return Inode::Unknown;
+            case 1: return Inode::RegularFile;
+            case 2: return Inode::Directory;
+            case 3: return Inode::CharacterDevice;
+            case 4: return Inode::BlockDevice;
+            case 5: return Inode::Fifo;
+            case 6: return Inode::Socket;
+            case 7: return Inode::SymbolicLink;
+
+            /// Invalid entry. Log and attempt to get the type from the inode.
+            default:
+                Log("Invalid file type {} in directory entry for {}.", Hdr.file_type, Hdr.inode);
+                break;
+        }
+    }
+
+    /// If the revision level is not dynamic, then we can only
+    /// determine the file format by looking at the inode.
+    auto Inode = ReadInode(Hdr.inode);
+    if (not Inode) return {};
+    return static_cast<Inode::FileFormat>(Inode->i_mode & Inode::FileFormatMask);
 }
 
 auto Drive::ReadDescriptorTable(u32 BlockGroupIndex) -> std::optional<BlockGroupDescriptor> {
@@ -479,16 +631,23 @@ bool Drive::WriteDescriptorTable(u32 BlockGroupIndex, const BlockGroupDescriptor
 /// ===========================================================================
 ///  Directory handle API.
 /// ===========================================================================
-Dir::Dir(Inode I_, std::shared_ptr<Drive> Drv_) : I(I_), Drv(std::move(Drv_)) {}
+Dir::Dir(Inode I_, InodeNumberType INum_, std::shared_ptr<Drive> Drv_)
+    : I(I_),
+      InodeNumber(INum_),
+      Drv(std::move(Drv_)) {}
 
 /// ===========================================================================
 ///  Drive API.
 /// ===========================================================================
 /// Open a directory.
-auto Drive::OpenDir(u32 InodeNumber) -> std::unique_ptr<Dir> {
-    auto i = ReadInode(InodeNumber);
-    if (not i) return {};
-    return std::unique_ptr<Dir>{::new Dir{*i, This.lock()}};
+auto Drive::OpenDir(std::string_view FilePath, std::string_view Origin) -> std::unique_ptr<Dir> {
+    auto INum = InodeFromPath(FilePath, Origin);
+    if (not INum) return {};
+
+    auto I = ReadInode(*INum);
+    if (not I) return {};
+
+    return std::unique_ptr<Dir>{::new Dir{*I, *INum, This.lock()}};
 }
 
 /// Initialise a directory iterator.
@@ -530,28 +689,35 @@ Dir::Iterator Dir::Iterator::operator++() {
 }
 
 /// Stat a file.
-auto Drive::Stat(u32 InodeNumber) -> std::optional<struct stat> {
-    /// Get the inode.
-    auto i = ReadInode(InodeNumber);
-    if (not i) return {};
+auto Drive::Stat(std::string_view FilePath, std::string_view Origin) -> std::optional<struct stat> {
+    /// Get the inode number.
+    auto INum = InodeFromPath(FilePath, Origin);
+    if (not INum) return {};
+
+    /// Read the inode.
+    auto I = ReadInode(*INum);
+    if (not I) {
+        Log("Failed to read inode {} for file '{}'", *INum, FilePath);
+        return {};
+    }
 
     /// Update the access time.
-    i->i_atime = (u32) std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-    if (not WriteInode(InodeNumber, *i)) return {};
+    I->i_atime = (u32) std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    if (not WriteInode(*INum, *I)) return {};
 
     /// Extract properties.
     struct stat st {};
-    st.st_ino = InodeNumber;
-    st.st_mode = i->i_mode;
-    st.st_nlink = i->i_links_count;
-    st.st_uid = i->i_uid;
-    st.st_gid = i->i_gid;
-    st.st_size = i->i_size;
+    st.st_ino = *INum;
+    st.st_mode = I->i_mode;
+    st.st_nlink = I->i_links_count;
+    st.st_uid = I->i_uid;
+    st.st_gid = I->i_gid;
+    st.st_size = I->i_size;
     st.st_blksize = Sb.block_size();
-    st.st_blocks = i->i_blocks;
-    st.st_atime = i->i_atime;
-    st.st_mtime = i->i_mtime;
-    st.st_ctime = i->i_ctime;
+    st.st_blocks = I->i_blocks;
+    st.st_atime = I->i_atime;
+    st.st_mtime = I->i_mtime;
+    st.st_ctime = I->i_ctime;
     return st;
 }
 
@@ -560,25 +726,25 @@ auto Drive::TryMount(FdType Fd) -> std::shared_ptr<Drive> {
     /// Read the superblock.
     Superblock sb;
     if (not Read(Fd, SUPERBLOCK_OFFSET, &sb, sizeof sb)) {
-        Log("Drive is too small to contain a valid ext2 filesystem.\n");
+        Log("Drive is too small to contain a valid ext2 filesystem.");
         return nullptr;
     }
 
     /// Validate the superblock.
     if (sb.s_magic != EXT2_SUPER_MAGIC) {
-        Log("Invalid magic number: 0x{:04x}\n", sb.s_magic);
+        Log("Invalid magic number: 0x{:04x}", sb.s_magic);
         return nullptr;
     }
 
     /// Check for incompatible or read-only features.
     if (sb.s_feature_incompat or sb.s_feature_ro_compat) {
-        Log("Incompatible or read-only features are enabled. Refusing to mount\n");
+        Log("Incompatible or read-only features are enabled. Refusing to mount.");
         return nullptr;
     }
 
     /// Check for errors.
     if (sb.s_state == FsState::HasErrors) {
-        Log("Filesystem has errors. Refusing to mount\n");
+        Log("Filesystem has errors. Refusing to mount.");
         return nullptr;
     }
 

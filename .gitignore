@@ -5,8 +5,8 @@
 
 ## Build files.
 out/
-ext2++
-ext2++.exe
+/ext2++
+/ext2++.exe
 
 ## Drives.
 *.bin

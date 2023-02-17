@@ -27,8 +27,8 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    /// Stat an inode.
-    auto st = Drive->Stat(2);
+    /// Stat a directory.
+    auto st = Drive->Stat("/");
     if (not st) {
         fmt::print(stderr, "Failed to stat inode\n");
         return 1;
@@ -51,7 +51,7 @@ int main(int argc, char** argv) {
     );
 
     /// Read a directory.
-    auto Dir = Drive->OpenDir(2);
+    auto Dir = Drive->OpenDir("/");
     if (not Dir) {
         fmt::print(stderr, "Failed to open directory\n");
         return 1;
