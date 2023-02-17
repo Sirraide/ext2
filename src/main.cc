@@ -51,7 +51,7 @@ int main(int argc, char** argv) {
     );
 
     /// Read a directory.
-    auto Dir = Drive->OpenDir("/");
+    auto Dir = Drive->OpenDir("/test");
     if (not Dir) {
         fmt::print(stderr, "Failed to open directory\n");
         return 1;

@@ -285,7 +285,7 @@ auto Drive::ComputeInodeOffset(u32 InodeNumber) -> std::optional<usz> {
 }
 
 
-auto Drive::FindDirectoryEntry(const Inode& I, std::string_view Name) -> std::optional<LinkedDirEntryHeader> {
+auto Drive::FindDirectoryEntry(Inode& I, std::string_view Name) -> std::optional<LinkedDirEntryHeader> {
     if (not I.Is(Inode::Directory)) return {};
     std::vector<char> EntryName;
     usz Offset = 0;
@@ -294,19 +294,20 @@ auto Drive::FindDirectoryEntry(const Inode& I, std::string_view Name) -> std::op
     while (Offset < I.i_size) {
         /// Read the directory entry header.
         LinkedDirEntryHeader H{};
-        if (not Read(FileHandle, Offset, &H, sizeof H)) return {};
+        if (not ReadInodeData(I, Offset, &H, sizeof H)) return {};
 
         /// Check if the name matches.
         if (H.name_len == Name.size()) {
             EntryName.clear();
             EntryName.resize(H.name_len);
-            if (not Read(FileHandle, Offset + sizeof H, EntryName.data(), H.name_len)) return {};
+            if (not ReadInodeData(I, Offset + sizeof H, EntryName.data(), H.name_len)) return {};
             if (std::string_view{EntryName.data(), EntryName.size()} == Name)
                 return H;
         }
 
         /// Skip to the next entry.
         Offset += H.rec_len;
+        if (H.rec_len == 0) break;
     }
 
     return {};
@@ -668,6 +669,12 @@ Dir::Iterator Dir::Iterator::operator++() {
     /// Read the next header.
     if (not D->Drv->ReadInodeData(D->I, NextOffset, &Hdr, sizeof Hdr)) {
         std::exchange(*this, {});
+        return *this;
+    }
+
+    /// Nothing more to read.
+    if (Hdr.rec_len == 0) {
+        Done = true;
         return *this;
     }
 

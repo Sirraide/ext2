@@ -272,7 +272,7 @@ class Drive final {
     auto ComputeInodeOffset(InodeNumberType InodeNumber) -> std::optional<usz>;
 
     /// Find a directory entry.
-    [[nodiscard]] auto FindDirectoryEntry(const Inode& I, std::string_view Name) -> std::optional<LinkedDirEntryHeader>;
+    [[nodiscard]] auto FindDirectoryEntry(Inode& I, std::string_view Name) -> std::optional<LinkedDirEntryHeader>;
 
     /// Get the type of a dir entry. This is a function because although the
     /// header contains the file type, it is only valid for revision 1, so in
